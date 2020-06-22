@@ -122,8 +122,7 @@ type Client struct {
 	invitationAPIBaseURL *url.URL
 	tokenURL             *url.URL
 	authConfig           *PasswordGrantConfig
-
-	token *oauth2.Token
+	tokenSource          oauth2.TokenSource
 
 	httpClient *http.Client
 }
@@ -160,7 +159,8 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.token = t
+
+	c.tokenSource = oauth2.ReuseTokenSource(t, oauthConfig.TokenSource(context.Background(), t))
 
 	return c, nil
 }
@@ -233,10 +233,16 @@ func (c *Client) newRequest(method string, u *url.URL, body interface{}) (*http.
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	// Use the token source if it's set.
-	if c.token != nil {
-		req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	if c.tokenSource == nil {
+		return req, nil
 	}
+
+	// Use the token for authentication.
+	tkn, err := c.tokenSource.Token()
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tkn.AccessToken)
 
 	return req, nil
 }
