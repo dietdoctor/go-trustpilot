@@ -240,7 +240,23 @@ func (c *Client) newRequest(method string, u *url.URL, body interface{}) (*http.
 	// Use the token for authentication.
 	tkn, err := c.tokenSource.Token()
 	if err != nil {
-		return nil, err
+		var e error
+
+		// Try to figure out what kind of error it is.
+		if rErr, ok := err.(*oauth2.RetrieveError); ok {
+			switch rErr.Response.StatusCode {
+			case http.StatusUnauthorized:
+				e = fmt.Errorf("%s: %w", rErr.Error(), ErrUnauthenticated)
+			case http.StatusBadRequest:
+				e = fmt.Errorf("%s: %w", rErr.Error(), ErrInvalidArgument)
+			case http.StatusNotFound:
+				e = fmt.Errorf("%s: %w", rErr.Error(), ErrNotFound)
+			default:
+				e = fmt.Errorf("%s: %w", rErr.Error(), ErrInternal)
+			}
+		}
+
+		return nil, e
 	}
 	req.Header.Set("Authorization", "Bearer "+tkn.AccessToken)
 
