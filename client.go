@@ -46,7 +46,7 @@ const (
 	invitationPathf = "private/business-units/%s/email-invitations"
 )
 
-// AuthenticationConfig configuration for the oauth2 password grant type. Use
+// PasswordGrantConfig configuration for the oauth2 password grant type. Use
 // TokenURL client option to set oauth2 token url.
 type PasswordGrantConfig struct {
 	ClientID     string
@@ -174,14 +174,10 @@ func (c *Client) CreateInvitation(ctx context.Context, r *CreateInvitationReques
 	}
 
 	var res CreateInvitationResponse
-	resp, err := c.do(ctx, req, &res)
-	if err != nil {
+	if err := c.do(ctx, req, &res); err != nil {
 		return nil, err
 	}
 
-	if err := parseError(resp); err != nil {
-		return nil, err
-	}
 	return &res, nil
 }
 
@@ -194,14 +190,10 @@ func (c *Client) ListTemplates(ctx context.Context, r *ListTemplatesRequest) (*L
 	}
 
 	var res ListTemplatesResponse
-	resp, err := c.do(ctx, req, &res)
-	if err != nil {
+	if err := c.do(ctx, req, &res); err != nil {
 		return nil, err
 	}
 
-	if err := parseError(resp); err != nil {
-		return nil, err
-	}
 	return &res, nil
 }
 
@@ -246,13 +238,13 @@ func (c *Client) newRequest(method string, u *url.URL, body interface{}) (*http.
 		if rErr, ok := err.(*oauth2.RetrieveError); ok {
 			switch rErr.Response.StatusCode {
 			case http.StatusUnauthorized:
-				e = fmt.Errorf("%s: %w", rErr.Error(), ErrUnauthenticated)
+				e = fmt.Errorf("%w: %s", ErrUnauthenticated, rErr.Error())
 			case http.StatusBadRequest:
-				e = fmt.Errorf("%s: %w", rErr.Error(), ErrInvalidArgument)
+				e = fmt.Errorf("%w: %s", ErrInvalidArgument, rErr.Error())
 			case http.StatusNotFound:
-				e = fmt.Errorf("%s: %w", rErr.Error(), ErrNotFound)
+				e = fmt.Errorf("%w: %s", ErrNotFound, rErr.Error())
 			default:
-				e = fmt.Errorf("%s: %w", rErr.Error(), ErrInternal)
+				e = fmt.Errorf("%w: %s", ErrInternal, rErr.Error())
 			}
 		}
 
@@ -263,7 +255,7 @@ func (c *Client) newRequest(method string, u *url.URL, body interface{}) (*http.
 	return req, nil
 }
 
-func (c *Client) do(ctx context.Context, req *http.Request, v interface{}) (*http.Response, error) {
+func (c *Client) do(ctx context.Context, req *http.Request, v interface{}) error {
 	if c.debug {
 		reqDump, err := httputil.DumpRequest(req, true)
 		if err != nil {
@@ -274,7 +266,7 @@ func (c *Client) do(ctx context.Context, req *http.Request, v interface{}) (*htt
 
 	resp, err := c.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -286,13 +278,17 @@ func (c *Client) do(ctx context.Context, req *http.Request, v interface{}) (*htt
 		fmt.Printf("%s\n", respDump)
 	}
 
+	if err := parseError(resp); err != nil {
+		return err
+	}
+
 	if resp.ContentLength != 0 && v != nil {
 		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-			return resp, err
+			return err
 		}
 	}
 
-	return resp, nil
+	return nil
 }
 
 func parseError(resp *http.Response) error {
@@ -300,7 +296,12 @@ func parseError(resp *http.Response) error {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
 		return nil
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return ErrInvalidArgument
+		// Attempt to read error response.
+		var e ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&e); err != nil {
+			return ErrInvalidArgument
+		}
+		return fmt.Errorf("%w: %s", ErrInvalidArgument, e.Details)
 	case http.StatusUnauthorized:
 		return ErrUnauthenticated
 	case http.StatusNotFound:
@@ -308,4 +309,15 @@ func parseError(resp *http.Response) error {
 	default:
 		return ErrInternal
 	}
+}
+
+type ErrorResponse struct {
+	Message       string `json:"message,omitempty"`
+	ErrorCode     int    `json:"errorCode,omitempty"`
+	Details       string `json:"details,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
+}
+
+func (r *ErrorResponse) Error() string {
+	return r.Message
 }
